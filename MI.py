@@ -1,130 +1,63 @@
-from sklearn.feature_selection import mutual_info_classif
 import pandas as pd
+import numpy as np
+from sklearn.feature_selection import mutual_info_classif
 
-# Store MI results for each type
-mi_results = []
+# ─────────────────────────────────────────────
+# CONFIG
+# ─────────────────────────────────────────────
+CLUSTER_COL      = 'CLUSTER'
+CATEGORICAL_COLS = []  # e.g. ['RFM_SEGMENT_ENC', 'L6M_REDEEMER']
+                       # leave empty [] to auto-detect binary/categorical
 
-# 1. NUMERICAL FEATURES - MI
-print("="*80)
-print("MUTUAL INFORMATION: NUMERICAL FEATURES")
-print("="*80)
-numerical_mi = []
+# ─────────────────────────────────────────────
+# PREP
+# ─────────────────────────────────────────────
+df_features   = df_main_final.drop(columns=[CLUSTER_COL])
+labels        = df_main_final[CLUSTER_COL]
+feature_names = df_features.columns.tolist()
 
-for feature in numerical_features:
-    try:
-        valid_data = df_winback[[feature, 'applied_flag']].dropna()
-        
-        if len(valid_data) > 10:
-            mi = mutual_info_classif(
-                valid_data[[feature]], 
-                valid_data['applied_flag'], 
-                discrete_features=False,  # Continuous
-                random_state=42
-            )[0]
-            
-            numerical_mi.append({
-                'feature': feature,
-                'feature_type': 'numerical',
-                'mutual_info': mi,
-                'n_samples': len(valid_data)
-            })
-    except Exception as e:
-        print(f"  Error with {feature}: {e}")
+# Auto-detect categorical/binary if not specified
+if not CATEGORICAL_COLS:
+    CATEGORICAL_COLS = [c for c in feature_names
+                        if df_features[c].nunique() <= 2
+                        or df_features[c].nunique() < 15]
 
-numerical_mi_df = pd.DataFrame(numerical_mi).sort_values('mutual_info', ascending=False)
-print(numerical_mi_df.to_string(index=False))
-mi_results.extend(numerical_mi)
+# discrete_features mask — True for categorical/binary, False for continuous
+discrete_mask = [True if col in CATEGORICAL_COLS else False for col in feature_names]
 
-# 2. ORDINAL FEATURES - MI
-print("\n" + "="*80)
-print("MUTUAL INFORMATION: ORDINAL FEATURES")
-print("="*80)
-ordinal_mi = []
+print(f"Continuous features : {discrete_mask.count(False)}")
+print(f"Discrete features   : {discrete_mask.count(True)}")
+print(f"Clusters            : {labels.nunique()}")
 
-for feature in categorical_ordinal_features:
-    try:
-        valid_data = df_winback[[feature, 'applied_flag']].dropna()
-        
-        if len(valid_data) > 10:
-            mi = mutual_info_classif(
-                valid_data[[feature]], 
-                valid_data['applied_flag'], 
-                discrete_features=True,  # Discrete
-                random_state=42
-            )[0]
-            
-            ordinal_mi.append({
-                'feature': feature,
-                'feature_type': 'ordinal',
-                'mutual_info': mi,
-                'n_samples': len(valid_data)
-            })
-    except Exception as e:
-        print(f"  Error with {feature}: {e}")
+# ─────────────────────────────────────────────
+# MUTUAL INFORMATION
+# ─────────────────────────────────────────────
+mi_scores = mutual_info_classif(
+    df_features,
+    labels,
+    discrete_features=discrete_mask,
+    random_state=42
+)
 
-ordinal_mi_df = pd.DataFrame(ordinal_mi).sort_values('mutual_info', ascending=False)
-print(ordinal_mi_df.to_string(index=False))
-mi_results.extend(ordinal_mi)
+# Normalised MI — divide by max to get 0-1 scale
+# makes all features directly comparable
+mi_max        = max(mi_scores) if max(mi_scores) > 0 else 1
+mi_normalised = mi_scores / mi_max
 
-# 3. NOMINAL FEATURES - MI
-print("\n" + "="*80)
-print("MUTUAL INFORMATION: NOMINAL FEATURES")
-print("="*80)
-nominal_mi = []
+mi_df = pd.DataFrame({
+    'Feature'           : feature_names,
+    'Type'              : ['Discrete' if c in CATEGORICAL_COLS else 'Continuous' for c in feature_names],
+    'MI Score'          : [round(s, 4) for s in mi_scores],
+    'Normalised MI (0-1)': [round(s, 4) for s in mi_normalised]
+}).sort_values('Normalised MI (0-1)', ascending=False).reset_index(drop=True)
 
-for feature in categorical_nominal_features:
-    try:
-        valid_data = df_winback[[feature, 'applied_flag']].dropna()
-        
-        if len(valid_data) > 10:
-            n_unique = valid_data[feature].nunique()
-            
-            if n_unique < 2:
-                print(f"  Warning: {feature} has only {n_unique} unique value(s). Skipping.")
-                continue
-            
-            mi = mutual_info_classif(
-                valid_data[[feature]], 
-                valid_data['applied_flag'], 
-                discrete_features=True,  # Discrete
-                random_state=42
-            )[0]
-            
-            nominal_mi.append({
-                'feature': feature,
-                'feature_type': 'nominal',
-                'mutual_info': mi,
-                'n_samples': len(valid_data)
-            })
-    except Exception as e:
-        print(f"  Error with {feature}: {e}")
+print("\n====== MUTUAL INFORMATION FEATURE IMPORTANCE ======")
+print(mi_df.to_string(index=True))
 
-nominal_mi_df = pd.DataFrame(nominal_mi).sort_values('mutual_info', ascending=False)
-print(nominal_mi_df.to_string(index=False))
-mi_results.extend(nominal_mi)
-
-# 4. COMBINED - ALL FEATURES
-print("\n" + "="*80)
-print("MUTUAL INFORMATION: TOP 20 FEATURES (ALL TYPES COMBINED)")
-print("="*80)
-all_mi_df = pd.DataFrame(mi_results).sort_values('mutual_info', ascending=False)
-top_20_mi = all_mi_df.head(20)
-print(top_20_mi.to_string(index=False))
-
-# Summary statistics
-print("\n" + "="*80)
-print("SUMMARY STATISTICS BY FEATURE TYPE")
-print("="*80)
-for ftype in ['numerical', 'ordinal', 'nominal']:
-    subset = all_mi_df[all_mi_df['feature_type'] == ftype]
-    if len(subset) > 0:
-        print(f"\n{ftype.upper()}:")
-        print(f"  Total features: {len(subset)}")
-        print(f"  Mean MI: {subset['mutual_info'].mean():.4f}")
-        print(f"  Median MI: {subset['mutual_info'].median():.4f}")
-        print(f"  Max MI: {subset['mutual_info'].max():.4f}")
-        print(f"  Min MI: {subset['mutual_info'].min():.4f}")
-
-# Save to CSV
-all_mi_df.to_csv('mutual_information_all_features.csv', index=False)
-print(f"\n✅ Results saved to: mutual_information_all_features.csv")
+# ─────────────────────────────────────────────
+# HOW TO READ
+# ─────────────────────────────────────────────
+# Normalised MI (0-1):
+#   ~1.0      → feature is most strongly associated with cluster labels
+#   ~0.0      → feature has little to no association with cluster labels
+#   No fixed threshold — rank order is what matters
